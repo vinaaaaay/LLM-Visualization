@@ -9,7 +9,7 @@ SHARED_STATE_FILE = "shared_state.json"
 BANNER = r"""
 ╔═══════════════════════════════════════════════════╗
 ║                                                   ║
-║   ⚡  L L M   V I S U A L I Z E R   ⚡           ║
+║   ⚡  L L M   V I S U A L I Z E R   ⚡              ║
 ║   ─────────────────────────────────────           ║
 ║   SmolLM2-360M · Transformer Internals            ║
 ║                                                   ║

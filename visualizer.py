@@ -41,7 +41,9 @@ tokenizer, model = load_model()
 MODEL_CONFIG = {
     "num_layers": model.config.num_hidden_layers,
     "num_heads": model.config.num_attention_heads,
+    "num_kv_heads": model.config.num_key_value_heads,
     "hidden_size": model.config.hidden_size,
+    "intermediate_size": model.config.intermediate_size,
     "vocab_size": model.config.vocab_size,
     "num_params": sum(p.numel() for p in model.parameters()),
 }
@@ -78,8 +80,26 @@ def run_model(prompt: str):
     input_ids = inputs["input_ids"]
     tokens = tokenizer.convert_ids_to_tokens(input_ids.cpu()[0])
 
+    # Register hooks to capture attention outputs (before residual add)
+    attn_outputs = {}
+    hooks = []
+    for li, layer_module in enumerate(model.model.layers):
+        def make_hook(idx):
+            def hook_fn(module, inp, out):
+                try:
+                    attn_out = out[0] if isinstance(out, tuple) else out
+                    attn_outputs[idx] = attn_out[0, 0, :5].detach().cpu().float().tolist()
+                except Exception:
+                    attn_outputs[idx] = [0.0] * 5
+            return hook_fn
+        hooks.append(layer_module.self_attn.register_forward_hook(make_hook(li)))
+
     with torch.no_grad():
         outputs = model(**inputs)
+
+    # Remove hooks
+    for h in hooks:
+        h.remove()
 
     hidden_states = outputs.hidden_states
     layer_norms = []
@@ -130,9 +150,51 @@ def run_model(prompt: str):
         gate_norm = float(layer_module.mlp.gate_proj.weight.norm())
         mlp_norms.append(round(gate_norm, 2))
 
+    # Per-layer detailed data for 3D visualization
+    NORM_SAMPLE = 32   # number of RMSNorm weight values to send
+    HEATMAP_SZ = 16    # NxN slice of MLP weight matrices
+    layer_details = []
+    for layer_module in model.model.layers:
+        # RMSNorm weights
+        ln1_w = layer_module.input_layernorm.weight[:NORM_SAMPLE].detach().cpu().float().tolist()
+        ln2_w = layer_module.post_attention_layernorm.weight[:NORM_SAMPLE].detach().cpu().float().tolist()
+        # MLP weight heatmaps (small slice)
+        gate_w = layer_module.mlp.gate_proj.weight[:HEATMAP_SZ, :HEATMAP_SZ].detach().cpu().float().tolist()
+        up_w = layer_module.mlp.up_proj.weight[:HEATMAP_SZ, :HEATMAP_SZ].detach().cpu().float().tolist()
+        down_w = layer_module.mlp.down_proj.weight[:HEATMAP_SZ, :HEATMAP_SZ].detach().cpu().float().tolist()
+        layer_details.append({
+            "ln1_weights": [round(v, 4) for v in ln1_w],
+            "ln2_weights": [round(v, 4) for v in ln2_w],
+            "gate_heatmap": [[round(v, 4) for v in row] for row in gate_w],
+            "up_heatmap": [[round(v, 4) for v in row] for row in up_w],
+            "down_heatmap": [[round(v, 4) for v in row] for row in down_w],
+        })
+
+    # Build per-layer attention contribution data
+    attn_contributions = []
+    for li in range(len(model.model.layers)):
+        # x = hidden state input to this layer (from outputs.hidden_states)
+        x_vals = hidden_states[li][0, 0, :5].detach().cpu().float().tolist()
+        x_vals = [round(v, 4) for v in x_vals]
+        a_vals = [round(v, 4) for v in (attn_outputs.get(li) or [0]*5)]
+        s_vals = [round(x_vals[i] + a_vals[i], 4) for i in range(len(x_vals))]
+        attn_contributions.append({"x": x_vals, "attn": a_vals, "sum": s_vals})
+
+    # Extract word embeddings for each token (subset of values for visualization)
+    token_embeddings = []
+    with torch.no_grad():
+        full_embeddings = model.model.embed_tokens(input_ids)[0] # shape: (seq_len, hidden_size)
+        for i in range(full_embeddings.shape[0]):
+            emb_vec = full_embeddings[i].detach().cpu().float().tolist()
+            # We want first 3 and last 2 values
+            subset = emb_vec[:3] + emb_vec[-2:]
+            subset = [round(v, 4) for v in subset]
+            token_embeddings.append(subset)
+
     return {
         "tokens": [t.replace("\u2581", " ").replace("\u0120", " ") for t in tokens],
         "token_ids": input_ids[0].tolist(),
+        "token_embeddings": token_embeddings,
         "layer_norms": layer_norms,
         "attention": attention_data,
         "predictions": predictions,
@@ -141,6 +203,8 @@ def run_model(prompt: str):
         "embed_sample": embed_weight,
         "layer_activations": layer_activations,
         "mlp_norms": mlp_norms,
+        "layer_details": layer_details,
+        "attn_contributions": attn_contributions,
     }
 
 
@@ -440,6 +504,29 @@ body {{
 .sm-close:hover {{ background: #2d3a4a; color: #e6edf3; }}
 @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
 
+/* Dots block for hidden layers */
+.dots-block {{
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px; font-weight: 600;
+  color: #6e7681; letter-spacing: 3px;
+  border: 1px dashed #2d3a4a; border-radius: 6px;
+  background: rgba(30, 42, 58, 0.3);
+  animation: dotsPulse 2.5s ease-in-out infinite;
+  cursor: default;
+  white-space: nowrap;
+}}
+.dots-block .dots-count {{
+  font-size: 10px; color: #484f58;
+  letter-spacing: 1px; font-weight: 400;
+}}
+@keyframes dotsPulse {{
+  0%, 100% {{ opacity: 0.6; }}
+  50% {{ opacity: 1; }}
+}}
+
 ::-webkit-scrollbar {{ width: 6px; }}
 ::-webkit-scrollbar-track {{ background: transparent; }}
 ::-webkit-scrollbar-thumb {{ background: #1e2a3a; border-radius: 3px; }}
@@ -470,7 +557,7 @@ function init() {{
   document.getElementById('stats').innerHTML =
     `SmolLM2 — <span>${{fmt}} params</span> · <span>${{CFG.num_layers}} layers</span> · <span>${{CFG.num_heads}} heads</span> · <span>hidden ${{CFG.hidden_size}}</span> · ${{statusText}}`;
 
-  if (DATA) currentLayer = Math.min(15, CFG.num_layers - 1);
+  if (DATA) currentLayer = CFG.num_layers - 1;  // default to last (visible) layer
   render();
   if (STATE === 'processing') startProcessingAnim();
 }}
@@ -580,19 +667,46 @@ function renderArch() {{
   h += ab('embed','Embed',CFG.hidden_size+'d',false);
   h += aw();
 
-  for (let i = 0; i < CFG.num_layers; i++) {{
+  const SHOW_THRESHOLD = 5;
+  const SHOW_START = 3;  // first N layers to show
+  const SHOW_END = 2;    // last N layers to show
+  const shouldCollapse = CFG.num_layers > SHOW_THRESHOLD;
+  const hiddenCount = shouldCollapse ? CFG.num_layers - SHOW_START - SHOW_END : 0;
+
+  function renderLayerBlock(i) {{
     const act = DATA ? (i === currentLayer) : false;
-    h += `<div class="layer-grp ${{act?'active':''}}" ${{DATA ? 'onclick="selectLayer('+i+')"' : ''}}>`;
-    h += `<div class="ltag">L${{i}}</div>`;
-    h += ab('ln','LN','',act);
-    h += ai();
-    h += ab('attn','Attn',CFG.num_heads+'h',act);
-    h += ai();
-    h += ab('ln','LN','',act);
-    h += ai();
-    h += ab('mlp','MLP','',act);
-    h += '</div>';
-    if (i < CFG.num_layers - 1) h += aw();
+    let s = `<div class="layer-grp ${{act?'active':''}}" ${{DATA ? 'onclick="selectLayer('+i+')"' : ''}}>`;
+    s += `<div class="ltag">L${{i}}</div>`;
+    s += ab('ln','LN','',act);
+    s += ai();
+    s += ab('attn','Attn',CFG.num_heads+'h',act);
+    s += ai();
+    s += ab('ln','LN','',act);
+    s += ai();
+    s += ab('mlp','MLP','',act);
+    s += '</div>';
+    return s;
+  }}
+
+  if (shouldCollapse) {{
+    // First SHOW_START layers
+    for (let i = 0; i < SHOW_START; i++) {{
+      h += renderLayerBlock(i);
+      h += aw();
+    }}
+    // Dots
+    h += `<div class="dots-block">⋯ <span class="dots-count">${{hiddenCount}} hidden layers</span> ⋯</div>`;
+    h += aw();
+    // Last SHOW_END layers
+    for (let i = CFG.num_layers - SHOW_END; i < CFG.num_layers; i++) {{
+      h += renderLayerBlock(i);
+      if (i < CFG.num_layers - 1) h += aw();
+    }}
+  }} else {{
+    for (let i = 0; i < CFG.num_layers; i++) {{
+      h += renderLayerBlock(i);
+      if (i < CFG.num_layers - 1) h += aw();
+    }}
   }}
 
   h += aw();
@@ -757,13 +871,13 @@ function buildFullArchScene() {{
   const seqLen = DATA.tokens.length;
 
   // Layout constants
-  const layerSpacing = 8;       // distance between layers along X
+  const layerSpacing = 16;      // distance between layers along X
   const blockH = 1.0;           // height of LN/MLP blocks
   const blockW = 1.5;           // width
   const blockD = 1.0;           // depth
   const headPlaneSize = 1.2;    // size of each attention head plane
   const headDepthSpacing = headPlaneSize + 0.15; // Z spacing — tile side by side
-  const subSpacing = 2.5;       // spacing within a layer (between LN, Attn, MLP)
+  const subSpacing = 5.5;       // spacing within a layer (between LN, Attn, MLP)
 
   const totalX = (numLayers + 2) * layerSpacing;
   let cursor = -totalX / 2;
@@ -889,17 +1003,112 @@ function buildFullArchScene() {{
     const zStep = 1.2;
     const totalZ = (numTokens - 1) * zStep;
     
-    const colTokX = embedStartX;
-    const colIdxX = embedStartX + 3;
-    const colEmbX = embedStartX + 7;
-    const colPosX = embedStartX + 10;
-    const embedFnX = colPosX + 4;
+    const colTokX = embedStartX - 2;
+    const colIdxX = colTokX + 3.5;
+    const colMatrixX = colIdxX + 4;
+    const colEmbX = colMatrixX + 4;
+    const embedFnX = colEmbX + 7; 
     embedOutEdgeX = embedFnX + blockW * 0.75;
 
     addTextSprite(colTokX, 2, 0, 'Token', '#e6edf3', 22);
     addTextSprite(colIdxX, 2, 0, 'ID', '#d2a8ff', 22);
-    addTextSprite(colEmbX, 2, 0, 'Word Vector', '#58a6ff', 22);
-    addTextSprite(colPosX, 2, 0, '+ Pos Enc', '#3fb950', 22);
+    addTextSprite(colEmbX, 3.5, 0, 'Token Embedding', '#58a6ff', 22);
+    addTextSprite(colMatrixX, 3.5, 0, 'Embedding Matrix', '#8b949e', 22);
+    addTextSprite(colMatrixX, 2.5, 0, 'W_e', '#8b949e', 18, 1.5, 0.4);
+
+    // Explanatory labels at the bottom
+    // We create a custom high-res canvas sprite to prevent blurriness on long text
+    const baseLineY = -2.5; // Shared baseline under all matrix/token items
+    
+    function addDescLabel(x, text, yDrop) {{
+      const dCanvas = document.createElement('canvas');
+      const dCtx = dCanvas.getContext('2d');
+      const dFs = 48; // Huge font size for sharp resolution
+      dCtx.font = 'bold ' + dFs + 'px JetBrains Mono, monospace';
+      
+      const metrics = dCtx.measureText(text);
+      dCanvas.width = metrics.width + 20;
+      dCanvas.height = dFs + 20;
+      
+      // Re-fetch context after resizing
+      const ctx = dCanvas.getContext('2d');
+      ctx.font = 'bold ' + dFs + 'px JetBrains Mono, monospace';
+      ctx.fillStyle = '#e6edf3'; // Bright, highly readable off-white
+      ctx.textAlign = 'center';
+      ctx.fillText(text, dCanvas.width / 2, dFs);
+      
+      const dTex = new THREE.CanvasTexture(dCanvas);
+      const dMat = new THREE.SpriteMaterial({{ map: dTex, transparent: true }});
+      const dSpr = new THREE.Sprite(dMat);
+      
+      // Scale down the giant sprite so it fits in the 3D world but remains sharp
+      const sprH = 0.5; 
+      dSpr.scale.set(sprH * dCanvas.width / dCanvas.height, sprH, 1);
+      
+      const finalY = baseLineY - yDrop;
+      dSpr.position.set(x, finalY, 0);
+      dSpr.userData.arch = true;
+      threeScene.add(dSpr);
+
+      // Draw pointer line linking the staggered text UP to the column baseline
+      addLine(new THREE.Vector3(x, finalY + sprH/2, 0), new THREE.Vector3(x, baseLineY + 0.5, 0), 0xffffff);
+    }}
+
+    // Stagger dropping them down to prevent overlap
+    addDescLabel(colTokX, '1. Split text into tokens', 0.0);
+    addDescLabel(colIdxX, '2. Map to vocabulary IDs', 1.0);
+    addDescLabel(colMatrixX, '3. Lookup vector by ID', 2.0);
+    addDescLabel(colEmbX, '4. Extract Word Vectors', 3.0);
+
+    // Draw the Embedding Matrix as a cool glowing tech-grid
+    const matZSize = totalZ + 2.0;
+
+    const mCanvas = document.createElement('canvas');
+    const mRows = DATA.embed_sample ? DATA.embed_sample.length : 20;
+    const mCols = DATA.embed_sample ? DATA.embed_sample[0].length : 20;
+    const cellSize = 16;
+    mCanvas.width = mCols * cellSize;
+    mCanvas.height = mRows * cellSize;
+    const mCtx = mCanvas.getContext('2d');
+    
+    // Dark background for matrix
+    mCtx.fillStyle = '#0d1117';
+    mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
+    
+    for (let r = 0; r < mRows; r++) {{
+      for (let c = 0; c < mCols; c++) {{
+        let val = DATA.embed_sample ? DATA.embed_sample[r][c] : (Math.random() - 0.5);
+        // Cool neon colors based on weight values
+        const alpha = Math.min(1.0, Math.abs(val) * 5.0 + 0.1);
+        if (val > 0) {{
+          mCtx.fillStyle = `rgba(57, 210, 192, ${{alpha}})`; // neon teal
+        }} else {{
+          mCtx.fillStyle = `rgba(188, 140, 255, ${{alpha}})`; // neon purple
+        }}
+        mCtx.fillRect(c * cellSize + 1, r * cellSize + 1, cellSize - 2, cellSize - 2);
+      }}
+    }}
+    
+    const matTex = new THREE.CanvasTexture(mCanvas);
+    matTex.magFilter = THREE.NearestFilter; // keep it sharp and blocky
+
+    // Give it slight thickness instead of flat plane
+    const matGeometry = new THREE.BoxGeometry(0.6, 4.0, matZSize);
+    const matMaterial = new THREE.MeshBasicMaterial({{
+      map: matTex,
+      transparent: true,
+      opacity: 0.9,
+    }});
+    const matBox = new THREE.Mesh(matGeometry, matMaterial);
+    matBox.position.set(colMatrixX, 0, 0);
+    matBox.userData.arch = true;
+    threeScene.add(matBox);
+    
+    // Add glowing wireframe edges
+    const edges = new THREE.EdgesGeometry(matGeometry);
+    const lineMat = new THREE.LineBasicMaterial({{ color: 0x58a6ff, opacity: 0.8, transparent: true }});
+    const matEdges = new THREE.LineSegments(edges, lineMat);
+    matBox.add(matEdges);
 
     for (let i = 0; i < numTokens; i++) {{
       const zPos = -totalZ / 2 + i * zStep;
@@ -910,22 +1119,122 @@ function buildFullArchScene() {{
       const idStr = DATA.token_ids[i].toString();
       addTextSprite(colIdxX, 0, zPos, idStr, '#d2a8ff', 16);
       
-      addLine(new THREE.Vector3(colTokX+1.2, 0, zPos), new THREE.Vector3(colIdxX-1.2, 0, zPos), 0x484f58);
+      // Line from Token -> ID
+      addLine(new THREE.Vector3(colTokX+1.5, 0, zPos), new THREE.Vector3(colIdxX-1.0, 0, zPos), 0x484f58);
 
-      // Embedding vector block
-      addBox(colEmbX, 0, zPos, 2.5, 0.3, 0.8, 0x58a6ff);
-      addLine(new THREE.Vector3(colIdxX+1.2, 0, zPos), new THREE.Vector3(colEmbX-1.5, 0, zPos), 0x484f58);
+      // Line from ID -> Matrix
+      addLine(new THREE.Vector3(colIdxX+1.0, 0, zPos), new THREE.Vector3(colMatrixX-0.1, 0, zPos), 0x484f58);
 
-      // Positional encoding vector block
-      addBox(colPosX, 0, zPos, 2.5, 0.3, 0.8, 0x3fb950);
-      addTextSprite(colPosX - 1.8, 0, zPos, '+', '#ffffff', 24, 1.0, 0.25);
-      addLine(new THREE.Vector3(colEmbX+1.5, 0, zPos), new THREE.Vector3(colPosX-1.5, 0, zPos), 0x484f58);
+      // Line from Matrix -> Word Vector
+      addLine(new THREE.Vector3(colMatrixX+0.1, 0, zPos), new THREE.Vector3(colEmbX-2.0, 0, zPos), 0x58a6ff);
 
-      // Connect to final unified block
-      addLine(new THREE.Vector3(colPosX+1.5, 0, zPos), new THREE.Vector3(embedFnX-blockW*0.6-0.1, 0, 0), 0x58a6ff);
+      // Embedding vector sprite (actual values)
+      if (DATA.token_embeddings && DATA.token_embeddings[i]) {{
+        const w = DATA.token_embeddings[i];
+        const lines = [
+          (w[0] >= 0 ? '+' : '') + w[0].toFixed(3),
+          (w[1] >= 0 ? '+' : '') + w[1].toFixed(3),
+          (w[2] >= 0 ? '+' : '') + w[2].toFixed(3),
+          ' \u22ef',
+          (w[3] >= 0 ? '+' : '') + w[3].toFixed(3),
+          (w[4] >= 0 ? '+' : '') + w[4].toFixed(3)
+        ];
+        const vc = document.createElement('canvas');
+        const fs = 14;
+        const lh = fs + 4;
+        const cW = 120, cH = lines.length * lh + 8;
+        vc.width = cW; vc.height = cH;
+        const vx = vc.getContext('2d');
+        vx.font = 'bold ' + fs + 'px JetBrains Mono, monospace';
+        
+        // Brackets
+        vx.strokeStyle = '#58a6ff'; vx.lineWidth = 1.5;
+        vx.beginPath(); vx.moveTo(12, 4); vx.lineTo(6, 4); vx.lineTo(6, cH-4); vx.lineTo(12, cH-4); vx.stroke();
+        vx.beginPath(); vx.moveTo(cW-12, 4); vx.lineTo(cW-6, 4); vx.lineTo(cW-6, cH-4); vx.lineTo(cW-12, cH-4); vx.stroke();
+        
+        for (let li = 0; li < lines.length; li++) {{
+          const val = parseFloat(lines[li]);
+          vx.fillStyle = isNaN(val) ? '#6e7681' : (val >= 0 ? '#58a6ff' : '#f85149');
+          vx.textAlign = 'center';
+          vx.fillText(lines[li], cW/2, (li+1) * lh);
+        }}
+        const vTex = new THREE.CanvasTexture(vc);
+        const vMat = new THREE.SpriteMaterial({{ map: vTex, transparent: true }});
+        const vSpr = new THREE.Sprite(vMat);
+        const sprH = 1.0;
+        vSpr.scale.set(sprH * cW / cH, sprH, 1);
+        vSpr.position.set(colEmbX, 0, zPos);
+        vSpr.userData.arch = true;
+        threeScene.add(vSpr);
+
+      }} else {{
+         // Fallback box if data is missing
+         addBox(colEmbX, 0, zPos, 2.5, 0.3, 0.8, 0x58a6ff);
+      }}
+
+      // We no longer draw individual lines from tokens to the Embedding Output matrix
+      // because the new Matrix visualization is a single unified block representing the whole sequence.
+    }}
+
+    // Draw one single centered connecting line from the middle of the Token Embeddings stack to the Embed Output Matrix
+    addLine(new THREE.Vector3(colEmbX + 1.2, 0, 0), new THREE.Vector3(embedFnX - 2.5, 0, 0), 0x58a6ff);
+    
+    // ═══ Sequence Embedding Output Matrix ═══
+    // Instead of a single box, show a stacked block representing (SeqLen, HiddenSize)
+    const eoRows = numTokens;
+    // We'll show first 3 and last 2 columns
+    const numColsToShow = DATA.token_embeddings && DATA.token_embeddings[0] ? DATA.token_embeddings[0].length : 5;
+    
+    const oCanvas = document.createElement('canvas');
+    const fs = 14;
+    const lh = fs + 6;
+    const colW = 65;
+    
+    const cW = numColsToShow * colW + 40; 
+    const cH = eoRows * lh + 16;
+    oCanvas.width = cW; oCanvas.height = cH;
+    const oCtx = oCanvas.getContext('2d');
+    
+    oCtx.font = 'bold ' + fs + 'px JetBrains Mono, monospace';
+    
+    // Brackets
+    oCtx.strokeStyle = '#58a6ff'; oCtx.lineWidth = 2;
+    oCtx.beginPath(); oCtx.moveTo(16, 4); oCtx.lineTo(8, 4); oCtx.lineTo(8, cH-4); oCtx.lineTo(16, cH-4); oCtx.stroke();
+    oCtx.beginPath(); oCtx.moveTo(cW-16, 4); oCtx.lineTo(cW-8, 4); oCtx.lineTo(cW-8, cH-4); oCtx.lineTo(cW-16, cH-4); oCtx.stroke();
+    
+    for (let r = 0; r < eoRows; r++) {{
+      const y = (r + 1) * lh;
+      for (let c = 0; c < numColsToShow; c++) {{
+        let x = 20 + c * colW + colW/2;
+        if (c === 3) {{
+          oCtx.fillStyle = '#6e7681';
+          oCtx.textAlign = 'center';
+          oCtx.fillText('\u22ef', x, y);
+          continue;
+        }}
+        
+        let val = (DATA.token_embeddings && DATA.token_embeddings[r]) ? DATA.token_embeddings[r][c] : 0;
+        oCtx.fillStyle = val >= 0 ? '#39d2c0' : '#f85149';
+        oCtx.textAlign = 'center';
+        const strVal = (val >= 0 ? '+' : '') + val.toFixed(2);
+        oCtx.fillText(strVal, x, y);
+      }}
     }}
     
-    addBox(embedFnX, 0, 0, blockW * 1.5, blockH * 1.5, blockD * 1.5, 0x1f6feb, 'Embed Output');
+    const oTex = new THREE.CanvasTexture(oCanvas);
+    const oMat = new THREE.SpriteMaterial({{ map: oTex, transparent: true }});
+    const oSpr = new THREE.Sprite(oMat);
+    const sprH = 2.0;
+    oSpr.scale.set(sprH * cW / cH, sprH, 1);
+    oSpr.position.set(embedFnX, 0, 0);
+    oSpr.userData.arch = true;
+    threeScene.add(oSpr);
+    
+    addTextSprite(embedFnX, 3.5, 0, 'Embed Output Matrix', '#58a6ff', 20);
+    // Made the dimension explicit and clearly visible right above the matrix
+    addTextSprite(embedFnX, 1.8, 0, `[${{numTokens}} \u00D7 ${{CFG.hidden_size}}]`, '#8b949e', 18, 3.0, 0.6);
+    addDescLabel(embedFnX, '5. Stack vectors into sequence matrix', 4.0);
+
     cursor = embedFnX + layerSpacing;
   }} else {{
     // Fallback if no detailed data
@@ -933,21 +1242,117 @@ function buildFullArchScene() {{
     cursor += layerSpacing;
   }}
 
-  // ═══ TRANSFORMER LAYERS ═══
-  for (let li = 0; li < numLayers; li++) {{
+  // ═══ TRANSFORMER LAYERS (collapsed: show first 3 + last 2) ═══
+  const SHOW_THRESHOLD_3D = 5;
+  const SHOW_START_3D = 3;
+  const SHOW_END_3D = 2;
+  const shouldCollapse3D = numLayers > SHOW_THRESHOLD_3D;
+  const hiddenCount3D = shouldCollapse3D ? numLayers - SHOW_START_3D - SHOW_END_3D : 0;
+
+  // Determine which layers to render
+  const layersToRender = [];
+  if (shouldCollapse3D) {{
+    for (let i = 0; i < SHOW_START_3D; i++) layersToRender.push(i);
+    layersToRender.push(-1);  // sentinel for dots
+    for (let i = numLayers - SHOW_END_3D; i < numLayers; i++) layersToRender.push(i);
+  }} else {{
+    for (let i = 0; i < numLayers; i++) layersToRender.push(i);
+  }}
+
+  let prevMlpXForConnect = null;
+  let isFirstRendered = true;
+
+  for (let ri = 0; ri < layersToRender.length; ri++) {{
+    const li = layersToRender[ri];
+
+    // ─── DOTS placeholder ───
+    if (li === -1) {{
+      const dotsX = cursor + layerSpacing * 0.5;
+      // Three dots with label
+      for (let di = 0; di < 3; di++) {{
+        const dotGeo = new THREE.SphereGeometry(0.25, 16, 16);
+        const dotMat = new THREE.MeshPhongMaterial({{ color: 0x6e7681, transparent: true, opacity: 0.7 }});
+        const dotMesh = new THREE.Mesh(dotGeo, dotMat);
+        dotMesh.position.set(dotsX + di * 1.2, 0, 0);
+        dotMesh.userData.arch = true;
+        threeScene.add(dotMesh);
+      }}
+      // Label
+      addTextSprite(dotsX + 1.2, 1.8, 0, hiddenCount3D + ' hidden layers', '#6e7681', 16, 4.0, 0.6);
+
+      // Connect previous MLP to dots
+      if (prevMlpXForConnect !== null) {{
+        addLine(
+          new THREE.Vector3(prevMlpXForConnect + blockW / 2 + 0.1, 0, 0),
+          new THREE.Vector3(dotsX - 0.5, 0, 0),
+          0x3fb950
+        );
+      }}
+      // Set cursor past the dots gap
+      cursor = dotsX + 3 * 1.2 + layerSpacing * 0.5;
+      // Mark that next layer should connect from dots
+      prevMlpXForConnect = dotsX + 3 * 1.2 - 0.5;
+      isFirstRendered = false;
+      continue;
+    }}
+
     const layerX = cursor;
     const normVal = DATA.layer_norms[li + 1] || 1;
     const mlpVal = (DATA.mlp_norms && DATA.mlp_norms[li]) || 1;
+    const details = DATA.layer_details ? DATA.layer_details[li] : null;
 
-    // LN1 block - RMSNorm
+    // ═══ LN1: RMSNorm — show weight vector values ═══
     const ln1X = layerX;
-    const ln1Color = new THREE.Color().setHSL(0.08, 0.7, 0.3 + Math.min(normVal / 30, 0.4));
-    addBox(ln1X, 0, 0, blockW * 0.6, blockH * 0.8, blockD * 0.6, ln1Color, 'RMSNorm');
+    const ln1EdgeRight = ln1X + 1.5;
+
+    addTextSprite(ln1X, 2.5, 0, 'RMSNorm', '#3fb950', 18, 3.5, 0.6);
+    addTextSprite(ln1X, 3.5, 0, 'x\u00B7w / \u221A(mean(x\u00B2)+\u03B5)', '#e6edf3', 20, 8.0, 0.8);
+    // Show input hidden state x (same values that appear in Add+Norm)
+    const acForLn = DATA.attn_contributions ? DATA.attn_contributions[li] : null;
+    if (acForLn && acForLn.x) {{
+      const w = acForLn.x;
+      const lines = [
+        (w[0] >= 0 ? '+' : '') + w[0].toFixed(4),
+        (w[1] >= 0 ? '+' : '') + w[1].toFixed(4),
+        (w[2] >= 0 ? '+' : '') + w[2].toFixed(4),
+        '    \u22ef',
+        (w[w.length-2] >= 0 ? '+' : '') + w[w.length-2].toFixed(4),
+        (w[w.length-1] >= 0 ? '+' : '') + w[w.length-1].toFixed(4)
+      ];
+      const vc = document.createElement('canvas');
+      const fontSize = 18;
+      const lineH = fontSize + 6;
+      const cW = 200, cH = lines.length * lineH + 16;
+      vc.width = cW; vc.height = cH;
+      const vx = vc.getContext('2d');
+      vx.font = fontSize + 'px JetBrains Mono, monospace';
+      // Left bracket
+      vx.strokeStyle = '#3fb950'; vx.lineWidth = 2;
+      vx.beginPath(); vx.moveTo(18, 4); vx.lineTo(8, 4); vx.lineTo(8, cH-4); vx.lineTo(18, cH-4); vx.stroke();
+      // Right bracket
+      vx.beginPath(); vx.moveTo(cW-18, 4); vx.lineTo(cW-8, 4); vx.lineTo(cW-8, cH-4); vx.lineTo(cW-18, cH-4); vx.stroke();
+      for (let i = 0; i < lines.length; i++) {{
+        const val = parseFloat(lines[i]);
+        vx.fillStyle = isNaN(val) ? '#6e7681' : (val >= 0 ? '#3fb950' : '#f85149');
+        vx.textAlign = 'center';
+        vx.fillText(lines[i], cW/2, (i+1) * lineH);
+      }}
+      const vTex = new THREE.CanvasTexture(vc);
+      const vMat = new THREE.SpriteMaterial({{ map: vTex, transparent: true }});
+      const vSpr = new THREE.Sprite(vMat);
+      const aspect = cW / cH;
+      const sprH = 2.0;
+      vSpr.scale.set(sprH * aspect, sprH, 1);
+      vSpr.position.set(ln1X, -0.2, 0);
+      vSpr.userData.arch = true;
+      threeScene.add(vSpr);
+    }}
+    addTextSprite(ln1X, 1.6, 0, 'x[' + CFG.hidden_size + ']', '#8b949e', 11, 2.0, 0.3);
 
     // Connector from LN1 to Attention heads
     const attnCenterX = layerX + subSpacing;
     addLine(
-      new THREE.Vector3(ln1X + blockW * 0.3 + 0.1, 0, 0),
+      new THREE.Vector3(ln1EdgeRight + 0.1, 0, 0),
       new THREE.Vector3(attnCenterX - headPlaneSize / 2 - 0.3, 0, 0),
       0xbc8cff
     );
@@ -961,40 +1366,233 @@ function buildFullArchScene() {{
       // Connect to LN1 (fan-in line)
       if (hi === 0 || hi === numHeads - 1 || hi === Math.floor(numHeads / 2)) {{
         addLine(
-          new THREE.Vector3(ln1X + blockW * 0.3, 0, 0),
+          new THREE.Vector3(ln1EdgeRight, 0, 0),
           new THREE.Vector3(attnCenterX - headPlaneSize / 2, 0, hz),
           0xbc8cff
         );
       }}
     }}
 
-    // LN2 after attention (Add & Norm)
+    // ═══ ADD+NORM: Residual arc + LN2 bar chart ═══
     const ln2X = attnCenterX + subSpacing;
-    addBox(ln2X, 0, 0, blockW * 0.6, blockH * 0.8, blockD * 0.6, ln1Color, 'Add+Norm');
+    const ln2EdgeRight = ln2X + 1.5;
 
-    // Connector from heads to LN2 (fan-out → merge)
+    // Residual bypass arc (curved line from LN1 input to Add+Norm)
+    const arcPoints = [];
+    const arcStartX = ln1X - 0.5;
+    const arcEndX = ln2X;
+    const arcY = 3.5;  // height of the arc
+    const arcSteps = 30;
+    for (let s = 0; s <= arcSteps; s++) {{
+      const t = s / arcSteps;
+      const ax = arcStartX + t * (arcEndX - arcStartX);
+      const ay = arcY * Math.sin(t * Math.PI) * 0.7;
+      arcPoints.push(new THREE.Vector3(ax, ay, 0));
+    }}
+    const arcGeo = new THREE.BufferGeometry().setFromPoints(arcPoints);
+    const arcMat = new THREE.LineBasicMaterial({{ color: 0x58a6ff, transparent: true, opacity: 0.5, linewidth: 2 }});
+    const arcLine = new THREE.Line(arcGeo, arcMat);
+    arcLine.userData.arch = true;
+    threeScene.add(arcLine);
+    addTextSprite((arcStartX + arcEndX) / 2, arcY * 0.7 + 0.7, 0, 'Residual', '#58a6ff', 13, 2.5, 0.4);
+
+
+    addTextSprite(ln2X, 2.5, 0, 'Add+Norm', '#58a6ff', 18, 3.5, 0.6);
+    addTextSprite(ln2X, 3.5, 0, 'x + Attn(RMSNorm(x))', '#e6edf3', 20, 8.0, 0.8);
+
+    // Show x + Attn(x) = result using captured attention data
+    const ac = DATA.attn_contributions ? DATA.attn_contributions[li] : null;
+    if (ac && ac.x) {{
+      const vc2 = document.createElement('canvas');
+      const fs2 = 12;
+      const lh2 = fs2 + 4;
+      const numV = ac.x.length + 1; // +1 for the ellipsis row
+      const cW2 = 360, cH2 = (numV + 1) * lh2 + 8;
+      vc2.width = cW2; vc2.height = cH2;
+      const vx2 = vc2.getContext('2d');
+      vx2.font = 'bold ' + fs2 + 'px JetBrains Mono, monospace';
+      // Headers
+      vx2.fillStyle = '#8b949e'; vx2.textAlign = 'center';
+      vx2.fillText('x', 50, lh2 - 2);
+      vx2.fillText('+', 110, lh2 - 2);
+      vx2.fillText('Attn(x)', 170, lh2 - 2);
+      vx2.fillText('=', 240, lh2 - 2);
+      vx2.fillText('result', 305, lh2 - 2);
+      vx2.font = fs2 + 'px JetBrains Mono, monospace';
+      for (let i = 0; i < numV; i++) {{
+        const y = (i + 2) * lh2 - 2;
+        if (i === 3) {{
+          vx2.fillStyle = '#6e7681'; 
+          vx2.textAlign = 'center';
+          vx2.fillText('\u22ef', 85, y);
+          vx2.fillText('+', 110, y);
+          vx2.fillText('\u22ef', 215, y);
+          vx2.fillText('=', 240, y);
+          vx2.fillText('\u22ef', 345, y);
+          continue;
+        }}
+        const dIdx = i > 3 ? i - 1 : i;
+        const fmt = (v) => (v >= 0 ? '+' : '') + v.toFixed(3);
+        // x
+        vx2.fillStyle = ac.x[dIdx] >= 0 ? '#3fb950' : '#f85149';
+        vx2.textAlign = 'right'; vx2.fillText(fmt(ac.x[dIdx]), 85, y);
+        vx2.fillStyle = '#6e7681'; vx2.textAlign = 'center'; vx2.fillText('+', 110, y);
+        // attn
+        vx2.fillStyle = ac.attn[dIdx] >= 0 ? '#bc8cff' : '#f85149';
+        vx2.textAlign = 'right'; vx2.fillText(fmt(ac.attn[dIdx]), 215, y);
+        vx2.fillStyle = '#6e7681'; vx2.textAlign = 'center'; vx2.fillText('=', 240, y);
+        // result
+        vx2.fillStyle = ac.sum[dIdx] >= 0 ? '#58a6ff' : '#f85149';
+        vx2.textAlign = 'right'; vx2.fillText(fmt(ac.sum[dIdx]), 345, y);
+      }}
+      // Brackets
+      const bTop = lh2 + 2, bBot = cH2 - 4;
+      vx2.lineWidth = 1.5;
+      vx2.strokeStyle = '#3fb950';
+      vx2.beginPath(); vx2.moveTo(16,bTop); vx2.lineTo(8,bTop); vx2.lineTo(8,bBot); vx2.lineTo(16,bBot); vx2.stroke();
+      vx2.beginPath(); vx2.moveTo(90,bTop); vx2.lineTo(98,bTop); vx2.lineTo(98,bBot); vx2.lineTo(90,bBot); vx2.stroke();
+      vx2.strokeStyle = '#bc8cff';
+      vx2.beginPath(); vx2.moveTo(125,bTop); vx2.lineTo(117,bTop); vx2.lineTo(117,bBot); vx2.lineTo(125,bBot); vx2.stroke();
+      vx2.beginPath(); vx2.moveTo(220,bTop); vx2.lineTo(228,bTop); vx2.lineTo(228,bBot); vx2.lineTo(220,bBot); vx2.stroke();
+      vx2.strokeStyle = '#58a6ff';
+      vx2.beginPath(); vx2.moveTo(255,bTop); vx2.lineTo(247,bTop); vx2.lineTo(247,bBot); vx2.lineTo(255,bBot); vx2.stroke();
+      vx2.beginPath(); vx2.moveTo(350,bTop); vx2.lineTo(355,bTop); vx2.lineTo(355,bBot); vx2.lineTo(350,bBot); vx2.stroke();
+
+      const vTex2 = new THREE.CanvasTexture(vc2);
+      const vMat2 = new THREE.SpriteMaterial({{ map: vTex2, transparent: true }});
+      const vSpr2 = new THREE.Sprite(vMat2);
+      const sprH2 = 1.6;
+      vSpr2.scale.set(sprH2 * cW2 / cH2, sprH2, 1);
+      vSpr2.position.set(ln2X, -0.3, 0);
+      vSpr2.userData.arch = true;
+      threeScene.add(vSpr2);
+    }}
+
+    // Connector from heads to Add+Norm (fan-out → merge)
     for (let hi = 0; hi < numHeads; hi++) {{
       if (hi === 0 || hi === numHeads - 1 || hi === Math.floor(numHeads / 2)) {{
         const hz = -headTotalZ / 2 + hi * headDepthSpacing;
         addLine(
           new THREE.Vector3(attnCenterX + headPlaneSize / 2, 0, hz),
-          new THREE.Vector3(ln2X - blockW * 0.3, 0, 0),
+          new THREE.Vector3(ln2X - 0.5, 0, 0),
           0xbc8cff
         );
       }}
     }}
 
-    // MLP / Feed-Forward block
-    const mlpX = ln2X + subSpacing;
-    const mlpColor = new THREE.Color().setHSL(0.1, 0.8, 0.25 + Math.min(mlpVal / 200, 0.35));
-    addBox(mlpX, 0, 0, blockW, blockH * 1.2, blockD, mlpColor, 'FFN');
+    // ═══ MLP / FFN: Neural Network Visualization ═══
+    const mlpStartX = ln2X + subSpacing;
+    const nnColSpacing = 3.5;
+    const neuronRadius = 0.12;
+    const nSpY = 0.5;
+    const nSpZ = 0.5;
+    const inRows = 4, inCols = 4;
+    const hidRows = 5, hidCols = 4;
+    const outRows = 4, outCols = 4;
 
-    // LN2 → MLP connector
+    function addNeuronGrid(cx, rows, cols, color, zOff) {{
+      const totalY = (rows - 1) * nSpY;
+      const totalZ = (cols - 1) * nSpZ;
+      const positions = [];
+      for (let r = 0; r < rows; r++) {{
+        for (let c = 0; c < cols; c++) {{
+          const ny = -totalY / 2 + r * nSpY;
+          const nz = -totalZ / 2 + c * nSpZ + (zOff || 0);
+          const geo = new THREE.SphereGeometry(neuronRadius, 10, 10);
+          const mat = new THREE.MeshPhongMaterial({{ color: color, transparent: true, opacity: 0.9, emissive: color, emissiveIntensity: 0.3, shininess: 80 }});
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.position.set(cx, ny, nz);
+          mesh.userData.arch = true;
+          threeScene.add(mesh);
+          positions.push(new THREE.Vector3(cx, ny, nz));
+        }}
+      }}
+      return positions;
+    }}
+
+    function addSparseConns(fromPos, toPos, color, every) {{
+      const step = every || 3;
+      for (let fi = 0; fi < fromPos.length; fi += step) {{
+        for (let ti = 0; ti < toPos.length; ti += step) {{
+          const opacity = 0.04 + Math.random() * 0.08;
+          const lineGeo = new THREE.BufferGeometry().setFromPoints([fromPos[fi], toPos[ti]]);
+          const lineMat = new THREE.LineBasicMaterial({{ color: color, transparent: true, opacity: opacity }});
+          const line = new THREE.Line(lineGeo, lineMat);
+          line.userData.arch = true;
+          threeScene.add(line);
+        }}
+      }}
+    }}
+    const gridH = (Math.max(inRows, hidRows, outRows) - 1) * nSpY;
+
+    // Column 1: Input grid
+    const col1X = mlpStartX;
+    const inputPos = addNeuronGrid(col1X, inRows, inCols, 0x58a6ff, 0);
+    addTextSprite(col1X, -gridH / 2 - 0.9, 0, 'Input', '#58a6ff', 14, 2.0, 0.4);
+    addTextSprite(col1X, -gridH / 2 - 1.3, 0, CFG.hidden_size + 'd', '#58a6ff', 11, 2.0, 0.3);
+
+    // Column 2: Gate grid (Z offset +)
+    const col2X = col1X + nnColSpacing;
+    const gateZOff = 1.5;
+    const gatePos = addNeuronGrid(col2X, hidRows, hidCols, 0xf0883e, gateZOff);
+    addTextSprite(col2X, gridH / 2 + 0.8, gateZOff, 'Gate', '#f0883e', 14, 2.0, 0.4);
+
+    // Column 2b: Up grid (Z offset -)
+    const upZOff = -1.5;
+    const upPos = addNeuronGrid(col2X, hidRows, hidCols, 0xbc8cff, upZOff);
+    addTextSprite(col2X, -gridH / 2 - 0.8, upZOff, 'Up', '#bc8cff', 14, 2.0, 0.4);
+
+    addTextSprite(col2X, gridH / 2 + 1.5, 0, CFG.intermediate_size + 'd', '#8b949e', 12, 2.0, 0.3);
+
+    addSparseConns(inputPos, gatePos, 0xf0883e, 3);
+    addSparseConns(inputPos, upPos, 0xbc8cff, 3);
+
+    // SiLU
+    const siluX = col2X + nnColSpacing * 0.45;
+    addTextSprite(siluX, gridH / 2 + 0.5, gateZOff, 'SiLU', '#f7c948', 15, 2.0, 0.4);
+    const siluPts = [];
+    for (let s = -12; s <= 12; s++) {{
+      const t = s / 12;
+      const sx = siluX - 0.5 + (t + 1) * 0.5;
+      const sy = gridH / 2 + t / (1 + Math.exp(-t * 4)) * 0.4;
+      siluPts.push(new THREE.Vector3(sx, sy, gateZOff));
+    }}
+    const siluGeo = new THREE.BufferGeometry().setFromPoints(siluPts);
+    const siluMat = new THREE.LineBasicMaterial({{ color: 0xf7c948, transparent: true, opacity: 0.9 }});
+    const siluLine = new THREE.Line(siluGeo, siluMat);
+    siluLine.userData.arch = true;
+    threeScene.add(siluLine);
+
+    // Column 3: Multiply grid (z=0)
+    const col3X = col2X + nnColSpacing;
+    const mulPos = addNeuronGrid(col3X, hidRows, hidCols, 0xe6edf3, 0);
+    addTextSprite(col3X, gridH / 2 + 0.8, 0, '⊙ Multiply', '#e6edf3', 14, 3.0, 0.4);
+
+    const minP = Math.min(gatePos.length, mulPos.length);
+    for (let ni = 0; ni < minP; ni++) {{
+      addLine(gatePos[ni], mulPos[ni], 0xf0883e);
+      addLine(upPos[ni], mulPos[ni], 0xbc8cff);
+    }}
+
+    // Column 4: Output grid
+    const col4X = col3X + nnColSpacing;
+    const outputPos = addNeuronGrid(col4X, outRows, outCols, 0x39d2c0, 0);
+    addTextSprite(col4X, -gridH / 2 - 0.9, 0, 'Output', '#39d2c0', 14, 2.0, 0.4);
+    addTextSprite(col4X, -gridH / 2 - 1.3, 0, CFG.hidden_size + 'd', '#39d2c0', 11, 2.0, 0.3);
+
+    addSparseConns(mulPos, outputPos, 0x39d2c0, 2);
+
+    const mlpEndX = col4X + 0.5;
+
     addLine(
-      new THREE.Vector3(ln2X + blockW * 0.3, 0, 0),
-      new THREE.Vector3(mlpX - blockW / 2 - 0.1, 0, 0),
+      new THREE.Vector3(ln2EdgeRight + 0.1, 0, 0),
+      new THREE.Vector3(col1X - 0.5, 0, 0),
       0x3fb950
     );
+
+    addTextSprite((col1X + col4X) / 2, gridH / 2 + 2.5, 0, 'Feed-Forward Network (MLP)', '#f0883e', 18, 6.0, 0.5);
+
+    const mlpX = mlpEndX;
 
     // Layer label on top
     const layerLblC = document.createElement('canvas');
@@ -1014,33 +1612,34 @@ function buildFullArchScene() {{
     threeScene.add(lls);
 
     // Connect to embedding or previous layer's MLP
-    if (li === 0) {{
+    if (isFirstRendered && li === 0) {{
       addLine(
         new THREE.Vector3(embedOutEdgeX + 0.1, 0, 0),
-        new THREE.Vector3(ln1X - blockW * 0.3 - 0.1, 0, 0),
+        new THREE.Vector3(ln1X - 0.5 - 0.1, 0, 0),
         0x58a6ff
       );
-    }} else {{
-      const prevMlpX = layerX - layerSpacing;
+    }} else if (prevMlpXForConnect !== null) {{
       addLine(
-        new THREE.Vector3(prevMlpX + blockW / 2 + 0.1, 0, 0),
-        new THREE.Vector3(ln1X - blockW * 0.3 - 0.1, 0, 0),
+        new THREE.Vector3(prevMlpXForConnect + 0.1, 0, 0),
+        new THREE.Vector3(ln1X - 0.5 - 0.1, 0, 0),
         0x3fb950
       );
     }}
+
+    prevMlpXForConnect = mlpX;
+    isFirstRendered = false;
 
     // Advance cursor for next layer
     cursor = mlpX + layerSpacing;
   }}
 
   // Connect last layer MLP to final blocks
-  const prevMlpX = cursor - layerSpacing;
 
   // ═══ FINAL LN ═══
   const finalLnX = cursor;
   addBox(finalLnX, 0, 0, blockW * 0.8, blockH, blockD * 0.8, 0xd29922, 'LN final');
   addLine(
-    new THREE.Vector3(prevMlpX + blockW / 2 + 0.1, 0, 0),
+    new THREE.Vector3(prevMlpXForConnect + 0.1, 0, 0),
     new THREE.Vector3(finalLnX - blockW * 0.4 - 0.1, 0, 0),
     0x3fb950
   );
