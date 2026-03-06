@@ -10,76 +10,7 @@
   $ pip install watchdog
             
 The following generation flags are not valid and may be ignored: ['output_attentions', 'output_hidden_states']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
-/Users/vinaykarman/Documents/sem6/LLM-Visualization/model_runner.py:139: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+/Users/vinaykarman/Documents/sem6/LLM-Visualization/model_runner.py:143: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
 Consider using tensor.detach() first. (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:837.)
   gate_norm = float(layer_module.mlp.gate_proj.weight.norm())
-[31m──[0m[31m────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m─────────────────────────[0m[31m──[0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mexec_code.py[0m:129 in exec_func_with_error_handling           [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mscript_runner.py[0m:689 in code_to_exec                        [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mvisualizer.py[0m:68 in <module>     [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m   [2m 65 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 66 [0m[2m# Import HTML builder[0m                                                          [31m [0m
-[31m [0m   [2m 67 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m [31m❱ [0m 68 [94mfrom[0m[90m [0m[4;96mhtml_builder[0m[90m [0m[94mimport[0m build_html                                            [31m [0m
-[31m [0m   [2m 69 [0m                                                                               [31m [0m
-[31m [0m   [2m 70 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 71 [0m[2m# Main Streamlit app[0m                                                           [31m [0m
-[31m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m [0m [2m /Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mhtml_builder.py[0m[1m:[0m[1m1357[0m            [91m [0m
-[91m [0m       const dCanvas [1m)[0m                                                                [91m [0m
-[91m [0m       [1;91m▲[0m                                                                              [91m [0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[1;91mSyntaxError: [0mf-string: invalid syntax. Perhaps you forgot a comma?
-[31m──[0m[31m────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m─────────────────────────[0m[31m──[0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mexec_code.py[0m:129 in exec_func_with_error_handling           [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mscript_runner.py[0m:689 in code_to_exec                        [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mvisualizer.py[0m:68 in <module>     [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m   [2m 65 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 66 [0m[2m# Import HTML builder[0m                                                          [31m [0m
-[31m [0m   [2m 67 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m [31m❱ [0m 68 [94mfrom[0m[90m [0m[4;96mhtml_builder[0m[90m [0m[94mimport[0m build_html                                            [31m [0m
-[31m [0m   [2m 69 [0m                                                                               [31m [0m
-[31m [0m   [2m 70 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 71 [0m[2m# Main Streamlit app[0m                                                           [31m [0m
-[31m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m [0m [2m /Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mhtml_builder.py[0m[1m:[0m[1m1357[0m            [91m [0m
-[91m [0m       const dCanvas [1m)[0m                                                                [91m [0m
-[91m [0m       [1;91m▲[0m                                                                              [91m [0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[1;91mSyntaxError: [0mf-string: invalid syntax. Perhaps you forgot a comma?
-[31m──[0m[31m────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m─────────────────────────[0m[31m──[0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mexec_code.py[0m:129 in exec_func_with_error_handling           [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/opt/homebrew/Caskroom/miniconda/base/envs/sysml/lib/python3.10/site-packages/stream[0m [31m [0m
-[31m [0m [2mlit/runtime/scriptrunner/[0m[1mscript_runner.py[0m:689 in code_to_exec                        [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m [2m/Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mvisualizer.py[0m:68 in <module>     [31m [0m
-[31m [0m                                                                                      [31m [0m
-[31m [0m   [2m 65 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 66 [0m[2m# Import HTML builder[0m                                                          [31m [0m
-[31m [0m   [2m 67 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m [31m❱ [0m 68 [94mfrom[0m[90m [0m[4;96mhtml_builder[0m[90m [0m[94mimport[0m build_html                                            [31m [0m
-[31m [0m   [2m 69 [0m                                                                               [31m [0m
-[31m [0m   [2m 70 [0m[2m# ---------------------------------------------------------------------------[0m  [31m [0m
-[31m [0m   [2m 71 [0m[2m# Main Streamlit app[0m                                                           [31m [0m
-[31m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[91m [0m [2m /Users/vinaykarman/Documents/sem6/LLM-Visualization/[0m[1mhtml_builder.py[0m[1m:[0m[1m1357[0m            [91m [0m
-[91m [0m       const dCanvas [1m)[0m                                                                [91m [0m
-[91m [0m       [1;91m▲[0m                                                                              [91m [0m
-[91m────────────────────────────────────────────────────────────────────────────────────────[0m
-[1;91mSyntaxError: [0mf-string: invalid syntax. Perhaps you forgot a comma?
   Stopping...

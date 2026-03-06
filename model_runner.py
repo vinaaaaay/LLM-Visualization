@@ -94,6 +94,11 @@ def run_model(prompt: str, tokenizer, model):
     for hs in hidden_states:
         layer_norms.append(float(hs.norm(dim=-1).mean()))
 
+    # Per-token energy: L2 norm of each token's hidden state at the final layer
+    final_hidden = hidden_states[-1]  # shape: [1, seq_len, hidden_size]
+    token_energies = final_hidden[0].norm(dim=-1).cpu().float().tolist()
+    token_energies = [round(e, 2) for e in token_energies]
+
     attention_data = {}
     for i, attn in enumerate(outputs.attentions):
         # Per-head: [num_heads, seq, seq]
@@ -260,4 +265,5 @@ def run_model(prompt: str, tokenizer, model):
         "layer_details": layer_details,
         "attn_contributions": attn_contributions,
         "qkv_data": qkv_data,
+        "token_energies": token_energies,
     }

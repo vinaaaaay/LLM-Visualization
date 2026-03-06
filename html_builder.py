@@ -707,13 +707,17 @@ function buildFullArchScene() {{
     // Label sprite
     if (label) {{
       const lc = document.createElement('canvas');
-      lc.width = 256;
-      lc.height = 48;
-      const lx = lc.getContext('2d');
-      lx.fillStyle = '#e6edf3';
-      lx.font = 'bold 18px JetBrains Mono, monospace';
-      lx.textAlign = 'center';
-      lx.fillText(label, 128, 30);
+      const lcCtx = lc.getContext('2d');
+      const lcFs = 48;
+      lcCtx.font = 'bold ' + lcFs + 'px JetBrains Mono, monospace';
+      const lcMetrics = lcCtx.measureText(label);
+      lc.width = Math.max(lcMetrics.width + 40, 128);
+      lc.height = lcFs + 20;
+      const lcCtx2 = lc.getContext('2d');
+      lcCtx2.font = 'bold ' + lcFs + 'px JetBrains Mono, monospace';
+      lcCtx2.fillStyle = '#ffffff';
+      lcCtx2.textAlign = 'center';
+      lcCtx2.fillText(label, lc.width / 2, lcFs);
       const lt = new THREE.CanvasTexture(lc);
       const sm = new THREE.SpriteMaterial({{ map: lt, transparent: true }});
       const sp = new THREE.Sprite(sm);
@@ -781,18 +785,27 @@ function buildFullArchScene() {{
 
   function addTextSprite(x, y, z, text, color, fontSize, scaleW, scaleH) {{
     const c = document.createElement('canvas');
-    c.width = 256;
-    c.height = 64;
     const ctx = c.getContext('2d');
-    ctx.fillStyle = color;
-    ctx.font = 'bold ' + fontSize + 'px JetBrains Mono, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(text, 128, 40);
+    // Use 2x the requested font size for high-res rendering
+    const renderFs = Math.max(fontSize * 2, 48);
+    ctx.font = 'bold ' + renderFs + 'px JetBrains Mono, monospace';
+    const metrics = ctx.measureText(text);
+    c.width = Math.max(metrics.width + 40, 128);
+    c.height = renderFs + 30;
+    // Re-set font after canvas resize
+    const ctx2 = c.getContext('2d');
+    ctx2.font = 'bold ' + renderFs + 'px JetBrains Mono, monospace';
+    ctx2.fillStyle = '#ffffff';
+    ctx2.textAlign = 'center';
+    ctx2.fillText(text, c.width / 2, renderFs);
     const tex = new THREE.CanvasTexture(c);
     const mat = new THREE.SpriteMaterial({{ map: tex, transparent: true }});
     const sprite = new THREE.Sprite(mat);
     sprite.position.set(x, y, z);
-    sprite.scale.set(scaleW || 3.0, scaleH || 0.75, 1);
+    // Always auto-calculate width from canvas aspect ratio to prevent overlap
+    const sh = scaleH || 0.75;
+    const sw = sh * c.width / c.height;
+    sprite.scale.set(sw, sh, 1);
     sprite.userData.arch = true;
     threeScene.add(sprite);
     return sprite;
@@ -1170,22 +1183,29 @@ function buildFullArchScene() {{
 
     // ═══ STAGE 1: Weight Matrix Circles (W_Q, W_K, W_V) ═══
     const wX = layerX;
-    function addWeightCircle(x, z, label, dimLabel, color) {{
-      const cGeo = new THREE.CylinderGeometry(wCircleR, wCircleR, 0.15, 24);
-      const cMat = new THREE.MeshPhongMaterial({{ color: color, transparent: true, opacity: 0.85, emissive: color, emissiveIntensity: 0.15 }});
-      const cMesh = new THREE.Mesh(cGeo, cMat);
-      // rotation.x = 0 means the cylinder's flat face points UP (Y). Perfect for a floor coin.
-      cMesh.position.set(x, 0, z);
-      cMesh.userData.arch = true;
-      threeScene.add(cMesh);
-      addTextSprite(x, 0.5, z - 0.1, label, '#e6edf3', 24, 2.5, 0.8);
-      addTextSprite(x, 0.0, z + wCircleR + 0.6, dimLabel, '#8b949e', 18, 3.5, 0.6); // Below circle in Z
+    function addWeightSquare(x, z, label, dimLabel, color) {{
+      const sqSize = wCircleR * 2;
+      const sqGeo = new THREE.BoxGeometry(sqSize, 0.15, sqSize);
+      const sqMat = new THREE.MeshPhongMaterial({{ color: color, transparent: true, opacity: 0.85, emissive: color, emissiveIntensity: 0.15 }});
+      const sqMesh = new THREE.Mesh(sqGeo, sqMat);
+      sqMesh.position.set(x, 0, z);
+      sqMesh.userData.arch = true;
+      threeScene.add(sqMesh);
+      // Wireframe edges
+      const sqEdges = new THREE.EdgesGeometry(sqGeo);
+      const sqLineMat = new THREE.LineBasicMaterial({{ color: 0xffffff, transparent: true, opacity: 0.3 }});
+      const sqWire = new THREE.LineSegments(sqEdges, sqLineMat);
+      sqWire.position.copy(sqMesh.position);
+      sqWire.userData.arch = true;
+      threeScene.add(sqWire);
+      addTextSprite(x, 0.5, z - 0.1, label, '#ffffff', 24, 2.5, 0.8);
+      addTextSprite(x, 0.0, z + wCircleR + 0.6, dimLabel, '#ffffff', 18, 3.5, 0.6);
     }}
-    addWeightCircle(wX, qRowZ, 'W_Q', CFG.hidden_size + '\\u00D7' + headDim, 0xf47067);
-    addWeightCircle(wX, kRowZ, 'W_K', CFG.hidden_size + '\\u00D7' + headDim, 0x39d2c0);
-    addWeightCircle(wX, vRowZ, 'W_V', CFG.hidden_size + '\\u00D7' + headDim, 0xbc8cff);
+    addWeightSquare(wX, qRowZ, 'W_Q', CFG.hidden_size + '\\u00D7' + headDim, 0xf47067);
+    addWeightSquare(wX, kRowZ, 'W_K', CFG.hidden_size + '\\u00D7' + headDim, 0x39d2c0);
+    addWeightSquare(wX, vRowZ, 'W_V', CFG.hidden_size + '\\u00D7' + headDim, 0xbc8cff);
 
-    // X Split to Q/K/V Circles
+    // X Split to Q/K/V Squares
     addLine(new THREE.Vector3(wX - 2.0, 0, kRowZ), new THREE.Vector3(wX - 2.0, 0, qRowZ), 0x8b949e);
     addLine(new THREE.Vector3(wX - 2.0, 0, kRowZ), new THREE.Vector3(wX - 2.0, 0, vRowZ), 0x8b949e);
     addLine(new THREE.Vector3(wX - 2.0, 0, qRowZ), new THREE.Vector3(wX - wCircleR - 0.1, 0, qRowZ), 0x8b949e);
@@ -1197,8 +1217,7 @@ function buildFullArchScene() {{
     const qktX = ktX + heatH/2 + stepX;
     const qktCenterZ = (qRowZ + kRowZ) / 2;
     const qktHeatSize = heatH * 1.5; 
-    const maskX = qktX;
-    const maskZ = qktCenterZ + qktHeatSize/2 + 1.2;
+
     const attnPatX = qktX + qktHeatSize/2 + stepX + 1.5;
     const attnPatSize = 4.0;
     const attnPatZ = qktCenterZ;
@@ -1255,11 +1274,7 @@ function buildFullArchScene() {{
 
       // ═══ STAGE 4: QK^T matrix (seq×seq) ═══
       const attnData = DATA.attention[li] && DATA.attention[li].length > hi ? DATA.attention[li][hi] : null;
-      if (attnData && attnData.length > 0) {{
-        drawHeatmap(attnData, qktX, yOff, qktCenterZ, qktHeatSize, qktHeatSize, 0xd2a8ff);
-      }} else {{
-        addBox(qktX, yOff, qktCenterZ, qktHeatSize, 0.1, qktHeatSize, 0xd2a8ff, 'QK^T');
-      }}
+      addBox(qktX, yOff, qktCenterZ, qktHeatSize, 0.1, qktHeatSize, 0xd2a8ff, '');
 
       // Connector: Q heatmap → QK^T (Down/Right)
       addLine(new THREE.Vector3(qkvHeatX + heatW/2 + 0.1, yOff, qRowZ), new THREE.Vector3(qktX, yOff, qRowZ), 0xf47067);
@@ -1270,19 +1285,15 @@ function buildFullArchScene() {{
       addLine(new THREE.Vector3(ktX + heatH/2 + 0.8, yOff, kRowZ), new THREE.Vector3(ktX + heatH/2 + 0.8, yOff, qktCenterZ), 0x39d2c0);
       addLine(new THREE.Vector3(ktX + heatH/2 + 0.8, yOff, qktCenterZ), new THREE.Vector3(qktX - qktHeatSize/2 - 0.1, yOff, qktCenterZ), 0x39d2c0);
 
-      // ═══ STAGE 5: Mask & Softmax box ═══
-      addBox(maskX, yOff, maskZ, 2.0, 0.1, 1.2, 0xf7c948, hi === 0 ? 'Mask & Softmax' : '');
-      // Connector: QK^T → Mask&Softmax
-      addLine(new THREE.Vector3(qktX, yOff, qktCenterZ + qktHeatSize/2 + 0.1), new THREE.Vector3(maskX, yOff, maskZ - 0.6), 0xd2a8ff);
+      // ═══ STAGE 5: Direct QK^T → Attention Pattern ═══
 
       // ═══ STAGE 6: Attention Pattern (post-softmax) ═══
       if (attnData && attnData.length > 0) {{
         drawHeatmap(attnData, attnPatX, yOff, attnPatZ, attnPatSize, attnPatSize, 0xd2a8ff);
       }}
 
-      // Connector: Mask&Softmax → Attention Pattern
-      addLine(new THREE.Vector3(maskX + 1.0 + 0.1, yOff, maskZ), new THREE.Vector3(attnPatX, yOff, maskZ), 0xf7c948);
-      addLine(new THREE.Vector3(attnPatX, yOff, maskZ), new THREE.Vector3(attnPatX, yOff, attnPatZ + attnPatSize/2 + 1.2), 0xf7c948);
+      // Connector: QK^T → Attention Pattern (direct)
+      addLine(new THREE.Vector3(qktX + qktHeatSize/2 + 0.1, yOff, qktCenterZ), new THREE.Vector3(attnPatX - attnPatSize/2 - 0.1, yOff, attnPatZ), 0xd2a8ff);
 
       // ═══ STAGE 7: ⊗ AV operation ═══
       addBox(avOpX, yOff, avOpZ, 1.0, 0.1, 1.0, 0xe6edf3, '\\u2297');
@@ -1331,54 +1342,147 @@ function buildFullArchScene() {{
           }}
         }}
 
-        addTextSprite(attnPatX, 0, attnPatZ - attnPatSize/2 - 1.5, 'A = Softmax(QK\\u1d40/\\u221Ad)', '#e6edf3', 28, 10.0, 0.8);
+        addTextSprite(attnPatX, 0, attnPatZ - attnPatSize/2 - 1.5, 'A = Softmax(QK\\u1d40/\\u221Ad)', '#e6edf3', 24, null, 0.6);
         addTextSprite(avOpX, 0, avOpZ + 1.2, 'AV', '#e6edf3', 24, 2.5, 0.7);
 
-        addTextSprite(outX - heatW/4, 0, vRowZ + heatH/2 + 0.6, 'ATTENTION HEAD OUT', '#58a6ff', 18, 7.5, 0.6); 
-        addTextSprite(outX + heatW/4, 0, vRowZ + heatH/2 + 0.6, 'O = AV', '#e6edf3', 24, 3.5, 0.7);            
-        addTextSprite(outX + heatW/2 - 0.5, 0, vRowZ + heatH/2 + 1.2, seqLen + '\\u00D7' + headDim, '#8b949e', 16, 2.5, 0.5); 
+        addTextSprite(outX, 0, vRowZ + heatH/2 + 0.6, 'O = AV  [' + seqLen + '\\u00D7' + headDim + ']', '#ffffff', 16, null, 0.5); 
         
         addTextSprite(wX + 15, 0, qRowZ - 3.0, 'ATTENTION HEAD (Layer ' + li + ')', '#6e7681', 26, 14.0, 0.8);
       }}
     }}
 
     // ═══ STAGE 9: Stacked Attentions Output and W_O ═══
-    // We concatenate all layers along X to form [seqLen x hidden_size]
-    const concatX = outX + heatW/2 + stepX;
-    
-    // Draw the giant concatenated flat box stretching backwards in Y to represent all heads combined
-    // Or we just draw one box that takes the output array
-    // Since we don't extract the fully concatenated layer output heatmap explicitly, we'll draw a unified flat box
     const totalYSize = numHeads > 1 ? (numHeads - 1) * yLayerGap + 0.5 : 2.0;
     const centerY = totalYSize / 2;
-    addBox(concatX, centerY, vRowZ, heatW * 0.5, totalYSize, heatH, 0x58a6ff, '');
-    addTextSprite(concatX, centerY, vRowZ + heatH/2 + 1.0, 'Stacked Attention', '#58a6ff', 18, 6.5, 0.6);
-    addTextSprite(concatX, centerY - 1.0, vRowZ + heatH/2 + 1.8, 'Head Outputs', '#58a6ff', 18, 5.0, 0.6);
-    addTextSprite(concatX + heatW*0.25 + 0.8, centerY, vRowZ + heatH/2 + 1.0, seqLen + '\\u00D7' + CFG.hidden_size, '#8b949e', 16, 2.5, 0.5);
 
-    // Connector from each head's O to the Concat Box
+    // ═══ CONCATENATED MATRIX: All heads merged into [seqLen x hidden_size] ═══
+    const catMatX = outX + heatW/2 + stepX + 1.0;
+    const catMatW = heatW;    // wider to represent merged hidden_size
+    const catMatH = heatH;
+
+    // Build a heatmap texture from concatenated head outputs
+    const catCanvas = document.createElement('canvas');
+    const catCols = 64;
+    const catRows = Math.max(seqLen, 4);
+    const catCellW = 4;
+    const catCellH = Math.max(4, Math.floor(128 / catRows));
+    catCanvas.width = catCols * catCellW;
+    catCanvas.height = catRows * catCellH;
+    const catCtx = catCanvas.getContext('2d');
+    catCtx.fillStyle = '#0d1117';
+    catCtx.fillRect(0, 0, catCanvas.width, catCanvas.height);
+    // Fill with data from all heads concatenated
+    for (let r = 0; r < catRows; r++) {{
+      for (let c = 0; c < catCols; c++) {{
+        const headIdx = Math.floor(c / (catCols / numHeads));
+        let val = 0;
+        if (qkvLayerData && qkvLayerData.output && qkvLayerData.output[headIdx]) {{
+          const headData = qkvLayerData.output[headIdx];
+          if (headData[r]) {{
+            const colInHead = c % Math.floor(catCols / numHeads);
+            const mappedCol = Math.floor(colInHead * headData[r].length / Math.floor(catCols / numHeads));
+            val = headData[r][mappedCol] || 0;
+          }}
+        }} else {{
+          val = Math.random() * 0.5;
+        }}
+        const t = Math.max(0, Math.min(1, (val + 1) / 2));
+        const cr = Math.floor(68 + t * (253 - 68));
+        const cg = Math.floor(1 + t * (231 - 1));
+        const cb = Math.floor(84 + (t < 0.5 ? t * 2 * (170-84) : (1-t)*2*170));
+        catCtx.fillStyle = `rgb(${{cr}},${{cg}},${{cb}})`;
+        catCtx.fillRect(c * catCellW, r * catCellH, catCellW, catCellH);
+      }}
+      // Draw head separator lines
+      for (let hi = 1; hi < numHeads; hi++) {{
+        const sepX = Math.floor(hi * catCols / numHeads) * catCellW;
+        catCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        catCtx.lineWidth = 1;
+        catCtx.beginPath();
+        catCtx.moveTo(sepX, 0);
+        catCtx.lineTo(sepX, catCanvas.height);
+        catCtx.stroke();
+      }}
+    }}
+    const catTex = new THREE.CanvasTexture(catCanvas);
+    catTex.magFilter = THREE.NearestFilter;
+    const catGeo = new THREE.PlaneGeometry(catMatW, catMatH);
+    const catMat = new THREE.MeshBasicMaterial({{ map: catTex, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }});
+    const catMesh = new THREE.Mesh(catGeo, catMat);
+    catMesh.rotation.x = -Math.PI / 2;
+    catMesh.position.set(catMatX, 0, vRowZ);
+    catMesh.userData.arch = true;
+    threeScene.add(catMesh);
+    // Border
+    const catEdgeGeo = new THREE.EdgesGeometry(catGeo);
+    const catEdgeMat = new THREE.LineBasicMaterial({{ color: 0x58a6ff, transparent: true, opacity: 0.8 }});
+    const catEdgeLine = new THREE.LineSegments(catEdgeGeo, catEdgeMat);
+    catEdgeLine.rotation.x = -Math.PI / 2;
+    catEdgeLine.position.copy(catMesh.position);
+    catEdgeLine.userData.arch = true;
+    threeScene.add(catEdgeLine);
+
+    addTextSprite(catMatX, 1.0, vRowZ + catMatH/2 + 0.8, 'Concat  [' + seqLen + '\\u00D7' + CFG.hidden_size + ']', '#ffffff', 18, null, 0.5);
+
+    // Converging lines from each stacked head into the single concat matrix
     for (let hi = 0; hi < numHeads; hi++) {{
       const yOff = hi * yLayerGap;
-      addLine(new THREE.Vector3(outX + heatW/2 + 0.1, yOff, vRowZ), new THREE.Vector3(concatX - heatW * 0.25 - 0.1, yOff, vRowZ), 0x58a6ff);
+      addLine(new THREE.Vector3(outX + heatW/2 + 0.1, yOff, vRowZ), new THREE.Vector3(catMatX - catMatW/2 - 0.1, 0, vRowZ), 0x58a6ff);
     }}
 
-    // Draw W_O Matrix Box
-    const woX = concatX + heatW*0.25 + stepX;
-    addBox(woX, centerY, vRowZ, 2.0, totalYSize, 2.0, 0x8b949e, 'W_O');
-    addTextSprite(woX, centerY, vRowZ + 1.0 + 1.0, 'Output Weight Matrix', '#8b949e', 18, 7.5, 0.6);
-    addTextSprite(woX, centerY, vRowZ + 1.0 + 1.8, CFG.hidden_size + '\\u00D7' + CFG.hidden_size, '#8b949e', 14, 3.5, 0.5);
+    // ═══ W_O: Output Weight Matrix as a flat rectangle ═══
+    const woX = catMatX + catMatW/2 + stepX;
+    const woSize = 3.5;
+    const woGeo = new THREE.PlaneGeometry(woSize, woSize);
+    const woCanvas = document.createElement('canvas');
+    woCanvas.width = 128;
+    woCanvas.height = 128;
+    const woCtx = woCanvas.getContext('2d');
+    woCtx.fillStyle = '#161b22';
+    woCtx.fillRect(0, 0, 128, 128);
+    const gridStep = 8;
+    woCtx.strokeStyle = 'rgba(139, 148, 158, 0.3)';
+    woCtx.lineWidth = 0.5;
+    for (let gi = 0; gi <= 128; gi += gridStep) {{
+      woCtx.beginPath(); woCtx.moveTo(gi, 0); woCtx.lineTo(gi, 128); woCtx.stroke();
+      woCtx.beginPath(); woCtx.moveTo(0, gi); woCtx.lineTo(128, gi); woCtx.stroke();
+    }}
+    for (let wr = 0; wr < 128; wr += gridStep) {{
+      for (let wc = 0; wc < 128; wc += gridStep) {{
+        const wv = Math.random();
+        const wa = wv * 0.6 + 0.1;
+        woCtx.fillStyle = wv > 0.5 ? `rgba(139, 148, 158, ${{wa}})` : `rgba(188, 140, 255, ${{wa * 0.5}})`;
+        woCtx.fillRect(wc + 1, wr + 1, gridStep - 2, gridStep - 2);
+      }}
+    }}
+    const woTex = new THREE.CanvasTexture(woCanvas);
+    woTex.magFilter = THREE.NearestFilter;
+    const woMat2 = new THREE.MeshBasicMaterial({{ map: woTex, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }});
+    const woMesh = new THREE.Mesh(woGeo, woMat2);
+    woMesh.rotation.x = -Math.PI / 2;
+    woMesh.position.set(woX, 0, vRowZ);
+    woMesh.userData.arch = true;
+    threeScene.add(woMesh);
+    const woEdgeGeo = new THREE.EdgesGeometry(woGeo);
+    const woEdgeMat = new THREE.LineBasicMaterial({{ color: 0x8b949e, transparent: true, opacity: 0.8 }});
+    const woEdgeLine = new THREE.LineSegments(woEdgeGeo, woEdgeMat);
+    woEdgeLine.rotation.x = -Math.PI / 2;
+    woEdgeLine.position.copy(woMesh.position);
+    woEdgeLine.userData.arch = true;
+    threeScene.add(woEdgeLine);
+    addTextSprite(woX, 1.2, vRowZ + woSize/2 + 1.0, 'W_O  [' + CFG.hidden_size + '\\u00D7' + CFG.hidden_size + ']', '#ffffff', 18, null, 0.5);
 
-    // Connector: Concat -> W_O
-    addLine(new THREE.Vector3(concatX + heatW*0.25 + 0.1, centerY, vRowZ), new THREE.Vector3(woX - 1.0 - 0.1, centerY, vRowZ), 0x8b949e);
+    // Connector: Concat -> W_O (multiply)
+    addLine(new THREE.Vector3(catMatX + catMatW/2 + 0.1, 0, vRowZ), new THREE.Vector3(woX - woSize/2 - 0.1, 0, vRowZ), 0x8b949e);
+    addTextSprite((catMatX + catMatW/2 + woX - woSize/2) / 2, 0.5, vRowZ, '\\u00D7', '#ffffff', 28, null, 0.7);
 
     // Draw Final Layer Out Heatmap Box
-    const layerOutX = woX + 1.0 + stepX;
-    addBox(layerOutX, centerY, vRowZ, heatW, 0.1, heatH, 0x58a6ff, 'Layer Out');
-    addTextSprite(layerOutX, centerY, vRowZ + heatH/2 + 1.0, 'Layer Out', '#e6edf3', 24, 4.0, 0.7);
-    addTextSprite(layerOutX + heatW/2 + 0.8, centerY, vRowZ, seqLen + '\\u00D7' + CFG.hidden_size, '#8b949e', 16, 2.5, 0.5);
-
+    const layerOutX = woX + woSize/2 + stepX;
+    addBox(layerOutX, 0, vRowZ, heatW, 0.1, heatH, 0x58a6ff, 'Layer Out');
+    addTextSprite(layerOutX, 1.0, vRowZ + heatH/2 + 1.0, 'Layer Out  [' + seqLen + '\\u00D7' + CFG.hidden_size + ']', '#ffffff', 18, null, 0.5);
     // Connector: W_O -> Layer Out
-    addLine(new THREE.Vector3(woX + 1.0 + 0.1, centerY, vRowZ), new THREE.Vector3(layerOutX - heatW/2 - 0.1, centerY, vRowZ), 0xe6edf3);
+    addLine(new THREE.Vector3(woX + woSize/2 + 0.1, 0, vRowZ), new THREE.Vector3(layerOutX - heatW/2 - 0.1, 0, vRowZ), 0xe6edf3);
+
 
     // ═══ ADD+NORM after attention ═══
     const ln2X = layerOutX + heatW/2 + stepX;
@@ -1387,48 +1491,86 @@ function buildFullArchScene() {{
     // Straight residual line that totally bypasses the Attention Head.
     // In diagram, residual skips along the bottom. We'll send it WAY OUT in -Z, over the top.
     const resZ = qRowZ - 2.5; 
-    addLine(new THREE.Vector3(layerX - 0.5, 0, 0), new THREE.Vector3(layerX - 0.5, 0, resZ), 0x58a6ff);
-    addLine(new THREE.Vector3(layerX - 0.5, 0, resZ), new THREE.Vector3(ln2X, 0, resZ), 0x58a6ff);
+    addLine(new THREE.Vector3(layerX - 2.0, 0, 0), new THREE.Vector3(layerX - 2.0, 0, resZ), 0x58a6ff);
+    addLine(new THREE.Vector3(layerX - 2.0, 0, resZ), new THREE.Vector3(ln2X, 0, resZ), 0x58a6ff);
     addLine(new THREE.Vector3(ln2X, 0, resZ), new THREE.Vector3(ln2X, 0, 0), 0x58a6ff);
     addTextSprite((layerX + ln2X) / 2, 0, resZ - 0.6, 'Residual', '#58a6ff', 20, 4.5, 0.6);
 
     // Final connector to O. Wait, LN2 box is placed at Y=0, Z=0. O heatmap is at Z=vRowZ (+5.0).
-    addBox(ln2X, 0, 0, blockW, 0.1, blockH * 1.5, 0x58a6ff, 'Add+Norm'); // Flat block!
+    addBox(ln2X, 0, 0, blockW, 0.1, blockH * 1.5, 0x58a6ff, ''); // Flat block!
+    addTextSprite(ln2X, 1.2, 0, 'Add+Norm', '#ffffff', 20, null, 0.6);
+    addTextSprite(ln2X, 0.4, 0, seqLen + '\\u00D7' + CFG.hidden_size, '#ffffff', 14, null, 0.4);
 
     // Connector: Layer Out → Add+Norm
-    // Go from LayerOut Box (Y=centerY, Z=vRowZ) right, then curve down to (Y=0, Z=0) where Add+Norm is.
-    addLine(new THREE.Vector3(layerOutX + heatW/2 + 0.1, centerY, vRowZ), new THREE.Vector3(ln2X - blockW/2 - 0.5, centerY, vRowZ), 0x58a6ff);
-    addLine(new THREE.Vector3(ln2X - blockW/2 - 0.5, centerY, vRowZ), new THREE.Vector3(ln2X - blockW/2 - 0.5, 0, vRowZ), 0x58a6ff);
+    // Go from LayerOut Box (Y=0, Z=vRowZ) right, then down to (Y=0, Z=0) where Add+Norm is.
+    addLine(new THREE.Vector3(layerOutX + heatW/2 + 0.1, 0, vRowZ), new THREE.Vector3(ln2X - blockW/2 - 0.5, 0, vRowZ), 0x58a6ff);
     addLine(new THREE.Vector3(ln2X - blockW/2 - 0.5, 0, vRowZ), new THREE.Vector3(ln2X - blockW/2 - 0.5, 0, 0), 0x58a6ff);
     addLine(new THREE.Vector3(ln2X - blockW/2 - 0.5, 0, 0), new THREE.Vector3(ln2X - blockW/2 - 0.1, 0, 0), 0x58a6ff);
 
-    // ═══ MLP (compact boxes) ═══
-    const mlpStartX = ln2X + 3.0;
-    const mlpBoxW = 1.3;
-    const mlpBoxH = 0.9;
-    const mlpBoxD = blockD * 0.8;
-    const mlpInnerSpacing = 2.2;
-    const gateZ = 1.2;
+    // ═══ Simple MLP (Neural Network block) ═══
+    const mlpStartX = ln2X + 4.5; // Increased spacing
+    const mlpW = 5.0;
+    
+    // Connector to MLP
+    addLine(new THREE.Vector3(ln2EdgeRight + 0.1, 0, 0), new THREE.Vector3(mlpStartX - mlpW/2 - 0.1, 0, 0), 0xf0883e);
 
-    addLine(new THREE.Vector3(ln2EdgeRight + 0.1, 0, 0), new THREE.Vector3(mlpStartX - mlpBoxW/2 - 0.3, 0, 0), 0xf0883e);
+    // Bounding Box for MLP (Semi-transparent)
+    addBox(mlpStartX, 0, 0, mlpW, 2.0, blockD * 1.5, 0xf0883e, '');
+    addTextSprite(mlpStartX, 2.0, 0, 'Feed-Forward (MLP)', '#ffffff', 20, null, 0.6);
+    
+    // Draw a small neural network inside the box
+    const drawNN = (centerX, centerZ, w) => {{
+      const layerSpacing = w * 0.4;
+      const xOffsets = [-layerSpacing, 0, layerSpacing];
+      const nodesPerLayer = [3, 4, 3];
+      const nodeSpacing = 0.6;
+      const sphereGeo = new THREE.SphereGeometry(0.15, 8, 8);
+      const sphereMat = new THREE.MeshBasicMaterial({{color: 0xffffff}});
+      
+      const layers = [];
+      // Draw nodes
+      for (let l = 0; l < 3; l++) {{
+        const layerNodes = [];
+        const xPos = centerX + xOffsets[l];
+        for (let n = 0; n < nodesPerLayer[l]; n++) {{
+          const zPos = centerZ - ((nodesPerLayer[l] - 1) * nodeSpacing) / 2 + n * nodeSpacing;
+          const nodeMesh = new THREE.Mesh(sphereGeo, sphereMat);
+          nodeMesh.position.set(xPos, 0, zPos);
+          nodeMesh.userData.arch = true;
+          threeScene.add(nodeMesh);
+          layerNodes.push(nodeMesh.position);
+        }}
+        layers.push(layerNodes);
+      }}
+      
+      // Draw connections
+      const lineMat = new THREE.LineBasicMaterial({{color: 0xffaa77, transparent: true, opacity: 0.5}});
+      for (let l = 0; l < 2; l++) {{
+        for (let n1 of layers[l]) {{
+          for (let n2 of layers[l+1]) {{
+            const geo = new THREE.BufferGeometry().setFromPoints([n1, n2]);
+            const line = new THREE.Line(geo, lineMat);
+            line.userData.arch = true;
+            threeScene.add(line);
+          }}
+        }}
+      }}
+    }};
+    
+    drawNN(mlpStartX, 0, mlpW);
 
-    addBox(mlpStartX, 0, gateZ, mlpBoxW, mlpBoxH, mlpBoxD, 0xf0883e, 'Gate');
-    addBox(mlpStartX, 0, -gateZ, mlpBoxW, mlpBoxH, mlpBoxD, 0xbc8cff, 'Up');
-    addLine(new THREE.Vector3(mlpStartX - mlpBoxW/2 - 0.3, 0, 0), new THREE.Vector3(mlpStartX - mlpBoxW/2 - 0.05, 0, gateZ), 0xf0883e);
-    addLine(new THREE.Vector3(mlpStartX - mlpBoxW/2 - 0.3, 0, 0), new THREE.Vector3(mlpStartX - mlpBoxW/2 - 0.05, 0, -gateZ), 0xbc8cff);
+    // Output from MLP
+    const mlpOutX = mlpStartX + mlpW/2 + 3.0; // Increased spacing
+    
+    // Connector: MLP -> MLP Output
+    addLine(new THREE.Vector3(mlpStartX + mlpW/2 + 0.1, 0, 0), new THREE.Vector3(mlpOutX - heatW/2 - 0.1, 0, 0), 0xf0883e);
+    
+    // MLP Output Heatmap Box
+    addBox(mlpOutX, 0, 0, heatW, 0.1, heatH, 0xf0883e, ''); // Removed double label
+    addTextSprite(mlpOutX, 1.0, heatH/2 + 1.0, 'MLP Out', '#ffffff', 20, null, 0.6);
+    addTextSprite(mlpOutX, 0.0, heatH/2 + 1.0, seqLen + '\\u00D7' + CFG.hidden_size, '#ffffff', 16, null, 0.5);
 
-    const siluMulX = mlpStartX + mlpInnerSpacing;
-    addBox(siluMulX, 0, 0, mlpBoxW * 1.3, mlpBoxH, mlpBoxD, 0xf7c948, 'SiLU \\u2299');
-    addLine(new THREE.Vector3(mlpStartX + mlpBoxW/2 + 0.1, 0, gateZ), new THREE.Vector3(siluMulX - mlpBoxW * 0.65 - 0.1, 0, 0), 0xf0883e);
-    addLine(new THREE.Vector3(mlpStartX + mlpBoxW/2 + 0.1, 0, -gateZ), new THREE.Vector3(siluMulX - mlpBoxW * 0.65 - 0.1, 0, 0), 0xbc8cff);
-
-    const downX = siluMulX + mlpInnerSpacing;
-    addBox(downX, 0, 0, mlpBoxW, mlpBoxH, mlpBoxD, 0x39d2c0, 'Down');
-    addLine(new THREE.Vector3(siluMulX + mlpBoxW * 0.65 + 0.1, 0, 0), new THREE.Vector3(downX - mlpBoxW/2 - 0.1, 0, 0), 0xf7c948);
-
-    addTextSprite((mlpStartX + downX) / 2, 2.5, 0, 'Feed-Forward (MLP)', '#f0883e', 22, 9.0, 0.7);
-
-    const mlpEndX = downX + mlpBoxW / 2;
+    const mlpEndX = mlpOutX + heatW / 2;
     const mlpX = mlpEndX;
 
     // Connect to embedding or previous layer's MLP
@@ -1455,43 +1597,129 @@ function buildFullArchScene() {{
 
   // Connect last layer MLP to final blocks
 
-  // ═══ FINAL LN ═══
-  const finalLnX = cursor;
-  addBox(finalLnX, 0, 0, blockW * 0.8, blockH, blockD * 0.8, 0xd29922, 'LN final');
+  // ═══ FINAL LN - EXPANDED VISUALIZATION ═══
+  const fnLnStartX = cursor;
+  const fnLw = 1.0;
+  const fnSpacing = 2.5;
+  
+  // 1. Input connector to LN sequence
   addLine(
     new THREE.Vector3(prevMlpXForConnect + 0.1, 0, 0),
-    new THREE.Vector3(finalLnX - blockW * 0.4 - 0.1, 0, 0),
+    new THREE.Vector3(fnLnStartX - fnSpacing/2, 0, 0),
     0x3fb950
   );
-  cursor += layerSpacing;
+
+  // Group Box to denote the whole LN block
+  const lnTotalW = fnSpacing * 4 + fnLw;
+  const lnGroupCenter = fnLnStartX + lnTotalW/2 - fnLw/2;
+  addTextSprite(lnGroupCenter, 4.0, 0, 'Final Layer Normalization', '#d29922', 26, null, 0.8);
+  const lnGroupGeo = new THREE.PlaneGeometry(lnTotalW + 1.0, blockD * 3.5);
+  const lnGroupMat = new THREE.MeshBasicMaterial({{color: 0xd29922, transparent: true, opacity: 0.1, side: THREE.DoubleSide}});
+  const lnGroupMesh = new THREE.Mesh(lnGroupGeo, lnGroupMat);
+  lnGroupMesh.rotation.x = -Math.PI / 2;
+  lnGroupMesh.position.set(lnGroupCenter, -0.2, 0);
+  lnGroupMesh.userData.arch = true;
+  threeScene.add(lnGroupMesh);
+
+  // 2. Mean (μ) and Variance (σ²)
+  const statX = fnLnStartX;
+  addBox(statX, 0, -1.5, fnLw, blockH, blockD*0.6, 0x58a6ff, 'Mean μ');
+  addBox(statX, 0, 1.5, fnLw, blockH, blockD*0.6, 0x58a6ff, 'Var σ²');
+  
+  // Branches to stats
+  addLine(new THREE.Vector3(statX - fnSpacing/2, 0, 0), new THREE.Vector3(statX - fnLw, 0, -1.5), 0x58a6ff);
+  addLine(new THREE.Vector3(statX - fnSpacing/2, 0, 0), new THREE.Vector3(statX - fnLw, 0, 1.5), 0x58a6ff);
+  addLine(new THREE.Vector3(statX - fnSpacing/2, 0, 0), new THREE.Vector3(statX + fnSpacing, 0, 0), 0xd29922);
+
+  // 3. Normalization (x - μ) / σ
+  const normX = statX + fnSpacing;
+  addBox(normX, 0, 0, fnLw*1.5, blockH*1.2, blockD*1.2, 0xd29922, '(x - μ) / σ');
+  addLine(new THREE.Vector3(statX + fnLw/2 + 0.1, 0, -1.5), new THREE.Vector3(normX - fnLw, 0, -1.5), 0x58a6ff);
+  addLine(new THREE.Vector3(statX + fnLw/2 + 0.1, 0, 1.5), new THREE.Vector3(normX - fnLw, 0, 1.5), 0x58a6ff);
+  addLine(new THREE.Vector3(normX - fnLw, 0, -1.5), new THREE.Vector3(normX - fnLw/2 - 0.1, 0, 0), 0x58a6ff);
+  addLine(new THREE.Vector3(normX - fnLw, 0, 1.5), new THREE.Vector3(normX - fnLw/2 - 0.1, 0, 0), 0x58a6ff);
+
+  // 4. Scale (γ) and Shift (β) parameters
+  const paramX = normX + fnSpacing;
+  addBox(paramX, 0, -1.5, fnLw, blockH, blockD*0.6, 0xbc8cff, 'Scale γ');
+  addBox(paramX, 0, 1.5, fnLw, blockH, blockD*0.6, 0xbc8cff, 'Shift β');
+  addLine(new THREE.Vector3(normX + fnLw/2 + 0.1, 0, 0), new THREE.Vector3(paramX + fnSpacing, 0, 0), 0xd29922);
+  
+  // Connect params to the main stream
+  addLine(new THREE.Vector3(paramX + fnLw/2, 0, -1.5), new THREE.Vector3(paramX + fnSpacing/2, 0, 0), 0xbc8cff);
+  addLine(new THREE.Vector3(paramX + fnLw/2, 0, 1.5), new THREE.Vector3(paramX + fnSpacing/2, 0, 0), 0xbc8cff);
+
+  // 5. Final Normalized Output
+  const fnOutX = paramX + fnSpacing;
+  const heatW = 4.5;
+  const heatH = 2.2;
+  addBox(fnOutX, 0, 0, heatW, 0.1, heatH, 0xd29922, '');
+  
+  // Explicitly Highlight the Last Token Row
+  // Positioned at the back edge of the matrix (Z = heatH/2)
+  const lastRowZ = heatH/2 - 0.1; // Slight offset so it sits visibly at the edge
+  addBox(fnOutX, 0.05, lastRowZ, heatW, 0.12, 0.2, 0xe6edf3, ''); // Highlight box
+  addTextSprite(fnOutX, 1.0, lastRowZ + 2.0, 'Select Last Token (h_{-1})  [1\u00D7960]', '#e6edf3', 14, null, 0.4);
+
+  addTextSprite(fnOutX, 1.0, heatH/2 + 1.5, 'Norm Out', '#ffffff', 20, null, 0.6);
+  addTextSprite(fnOutX, 0.0, heatH/2 + 1.5, seqLen + '\\u00D7' + CFG.hidden_size, '#ffffff', 16, null, 0.5);
+
+  const finalLnX = fnOutX; // so downstream softmax knows where it ended
+  cursor = fnOutX + layerSpacing;
+
+  // ═══ UNEMBEDDING (LM HEAD) ═══
+  const unembedX = cursor;
+  addBox(unembedX, 0, 0, blockW, blockH, blockD, 0x8b949e, 'LM Head');
+  addTextSprite(unembedX, 2.0, 0, 'Unembedding Matrix', '#8b949e', 22, null, 0.6);
+  addTextSprite(unembedX, 1.2, 0, CFG.hidden_size + '\\u00D7Vocab_Size', '#8b949e', 16, null, 0.5);
+  
+  // Connection starts from the highlighted last row Z position!
+  addLine(
+    new THREE.Vector3(finalLnX + heatW/2 + 0.1, 0, lastRowZ),
+    new THREE.Vector3(unembedX - blockW/2 - 0.1, 0, 0),
+    0xe6edf3 // Colored specific to the last token selection
+  );
+  
+  // Dimension math text below the LM Head Box (Unembedding)
+  addTextSprite(unembedX, -1.5, 0, '[1\\u00D7' + CFG.hidden_size + '] \\u00D7 [' + CFG.hidden_size + '\\u00D7Vocab] = [1\\u00D7Vocab]', '#ffffff', 20, null, 0.6);
+  
+  cursor = unembedX + layerSpacing;
 
   // ═══ SOFTMAX — DETAILED VISUALIZATION ═══
   const softmaxX = cursor;
   // Keep a smaller label box for "Softmax"
   addBox(softmaxX, 0, 0, blockW * 0.8, blockH, blockD * 0.8, 0x39d2c0, 'Softmax');
   addLine(
-    new THREE.Vector3(finalLnX + blockW * 0.4 + 0.1, 0, 0),
+    new THREE.Vector3(unembedX + blockW/2 + 0.1, 0, 0),
     new THREE.Vector3(softmaxX - blockW * 0.4 - 0.1, 0, 0),
     0x39d2c0
   );
 
+  // Explanation text above Softmax box
+  addTextSprite(softmaxX, 1.8, 0, '[1 \u00D7 Vocab] \u2192 Softmax \u2192 [1 \u00D7 Vocab]', '#ffffff', 18, null, 0.5);
+
   // If we have softmax_data, draw logit bars and probability bars
   if (DATA.softmax_data && DATA.softmax_data.length > 0) {{
-    const sd = DATA.softmax_data;
-    const numTokens = Math.min(sd.length, 10);
+    // Sort descending by probability to get the Top-K predictions
+    const sortedData = [...DATA.softmax_data].sort((a, b) => b.prob - a.prob);
+    // Slice exactly the top 5 predictions to draw 5 pairs of bars
+    const sd = sortedData.slice(0, 5);
+    const numTokens = sd.length;
+    
+    // Adjust spacing since we now have 5 bars instead of 1
     const barW = 0.4;
     const barD = 0.4;
     const maxLogit = Math.max(...sd.map(d => Math.abs(d.logit)));
-    const maxProb = sd[0]?.prob || 1;
+    const maxProb = sd[0]?.prob || 0.1; // Safely avoid divide-by-zero
     const logitScale = 4;    // max bar height for logits
     const probScale = 5;     // max bar height for probs
-    const barSpacingZ = barD + 0.3;
+    const barSpacingZ = barD + 1.2; // Wider spacing for text legibility without overlapping
     const totalBarZ = (numTokens - 1) * barSpacingZ;
 
     // Logit bars (left of softmax box)
-    const logitGroupX = softmaxX + 3;
+    const logitGroupX = softmaxX + 5;
     // Prob bars (right)
-    const probGroupX = softmaxX + 7;
+    const probGroupX = softmaxX + 10;
 
     // Title sprites
     function addTitle(x, text, color) {{
@@ -1527,20 +1755,29 @@ function buildFullArchScene() {{
       new THREE.Vector3(probGroupX - barW / 2 - 0.6, probScale * 0.4, 0),
       0xffffff
     );
-    // Arrow label
+    // Softmax Formula Label (Moved underneath the Softmax Block)
     const arrowC = document.createElement('canvas');
-    arrowC.width = 256;
-    arrowC.height = 48;
+    arrowC.width = 540;
+    arrowC.height = 100;
     const arx = arrowC.getContext('2d');
     arx.fillStyle = '#8b949e';
-    arx.font = '16px JetBrains Mono, monospace';
+    arx.font = 'bold 22px JetBrains Mono, monospace';
     arx.textAlign = 'center';
-    arx.fillText('softmax(\u00b7)', 128, 32);
+    
+    // Formula Breakdown
+    arx.fillText('P(z_i) = exp(z_i) / \u03A3 exp(z_j)', 270, 32); 
+    
+    arx.font = '16px JetBrains Mono, monospace';
+    arx.fillStyle = '#39d2c0';
+    arx.fillText('Softmax transforms logits to 0-1 probabilities', 270, 64);
+    arx.fillText('Calculated over the Vocab dimension per token', 270, 86);
+    
     const art = new THREE.CanvasTexture(arrowC);
     const arsm = new THREE.SpriteMaterial({{ map: art, transparent: true }});
     const arsp = new THREE.Sprite(arsm);
-    arsp.position.set((logitGroupX + probGroupX) / 2, logitScale * 0.4 + 0.7, 0);
-    arsp.scale.set(2.5, 0.5, 1);
+    // Explicitly reposition to center closer under the Softmax Box
+    arsp.position.set(softmaxX, -1.8, 0); 
+    arsp.scale.set(3.5, 0.65, 1);
     arsp.userData.arch = true;
     threeScene.add(arsp);
 
@@ -1677,22 +1914,36 @@ function buildFullArchScene() {{
 function renderStep3() {{
   let h = '<div class="panel">';
   h += '<div class="panel-step"><span class="dot" style="background:#39d2c0;"></span>Step 3</div>';
-  h += '<div class="panel-title">What Comes Next?</div>';
-  h += '<div class="panel-desc">After thinking through <em>' + CFG.num_layers + ' layers</em>, the AI ranks every word it knows (<em>' + CFG.vocab_size.toLocaleString() + ' words!</em>) by probability.</div>';
+  h += '<div class="panel-title">Token Energy Analysis</div>';
+  h += '<div class="panel-desc">After processing through <em>' + CFG.num_layers + ' layers</em>, each token carries a different amount of energy — revealing which parts of the input the model focuses on most.</div>';
 
-  const mx = DATA.predictions[0]?.prob || 1;
-  DATA.predictions.forEach((p,i) => {{
-    const w = Math.max(3, (p.prob/mx)*100);
-    const hue = 160 + i*14;
-    h += `<div class="pred-row" style="animation-delay:${{i*0.06}}s">
-      <span class="pred-rank">#${{i+1}}</span>
-      <span class="pred-word">${{esc(p.word||'(empty)')}}</span>
-      <div class="pred-bar-bg"><div class="pred-bar" style="width:${{w}}%;background:hsl(${{hue}},55%,50%);"></div></div>
-      <span class="pred-pct">${{(p.prob*100).toFixed(1)}}%</span>
-    </div>`;
-  }});
+  h += '<div style="margin-top:14px;">';
 
-  h += '<div style="margin-top:14px;border-top:1px solid #1e2a3a;padding-top:10px;">';
+  // ─── Energy Per Token ───
+  if (DATA.token_energies && DATA.tokens) {{
+    h += '<div class="energy-label" style="margin-bottom:2px;text-align:left;">Energy per Token</div>';
+    h += '<div style="color:#8b949e;font-size:11px;margin-bottom:8px;">L2 norm of final hidden state — shows which tokens the model focuses on</div>';
+    const te = DATA.token_energies;
+    const teMax = Math.max(...te);
+    DATA.tokens.forEach((tok, i) => {{
+      const val = te[i] || 0;
+      const pct = teMax > 0 ? (val / teMax) * 100 : 0;
+      // gradient from cool blue (low energy) to hot orange (high energy)
+      const t = teMax > 0 ? val / teMax : 0;
+      const r = Math.round(88 + t * (240 - 88));
+      const g = Math.round(166 + t * (136 - 166));
+      const b = Math.round(255 + t * (62 - 255));
+      h += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+        <span style="min-width:60px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:12px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${{esc(tok.trim() || '?')}}</span>
+        <div style="flex:1;height:14px;background:#161b22;border-radius:3px;overflow:hidden;">
+          <div style="width:${{Math.max(2,pct)}}%;height:100%;background:rgb(${{r}},${{g}},${{b}});border-radius:3px;transition:width .3s;"></div>
+        </div>
+        <span style="min-width:40px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b949e;">${{val.toFixed(1)}}</span>
+      </div>`;
+    }});
+    h += '<div style="border-top:1px solid #1e2a3a;margin-top:8px;padding-top:8px;"></div>';
+  }}
+
   h += '<div class="energy-label" style="margin-bottom:4px;text-align:left;">Hidden State Energy per Layer</div>';
   h += renderEnergy(DATA.layer_norms);
   h += '<div class="energy-label">Layer 0 → ' + CFG.num_layers + '</div>';
